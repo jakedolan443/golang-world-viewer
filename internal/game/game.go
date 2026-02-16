@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"image/color"
 
+	"github.com/ebitenui/ebitenui"
+	euiimage "github.com/ebitenui/ebitenui/image"
+	"github.com/ebitenui/ebitenui/widget"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 
@@ -14,21 +17,19 @@ import (
 	"shipping/internal/mapview"
 	"shipping/internal/timecontrol"
 	"shipping/internal/ui"
-	"shipping/internal/ui/widget"
 	"shipping/internal/world"
 )
 
 type Game struct {
-	Config     *config.Config
-	World      *world.World
-	Map        *mapview.MapView
-	UIManager  *ui.Manager
-	OldPanels  *ui.Layer // Keep for info panel
-	Time       *timecontrol.TimeControl
-	Console    *console.Console
+	Config   *config.Config
+	World    *world.World
+	Map      *mapview.MapView
+	UI       *ui.Layer
+	EbitenUI *ebitenui.UI
+	Time     *timecontrol.TimeControl
+	Console  *console.Console
 
-	// FPS label for dynamic updates
-	fpsLabel *widget.Label
+	fpsLabel *widget.Text
 }
 
 func New(cfg *config.Config) (*Game, error) {
@@ -58,18 +59,9 @@ func New(cfg *config.Config) (*Game, error) {
 		color.RGBA{150, 125, 65, 255},
 	))
 
-	// Create new UI framework manager
-	theme := ui.DefaultTheme()
-	uiMgr := ui.NewManager(theme)
+	uiLayer := ui.NewLayer()
 
-	tc := timecontrol.New(cfg.Time.SpeedOptions, cfg.Time.DefaultSpeed)
-
-	// Build the topbar using the new widget system
-	buildTopBar(uiMgr, cfg, tc)
-
-	// Keep old system for info panel (bottom-right)
-	oldPanels := ui.NewLayer()
-	oldPanels.AddPanel(&ui.Panel{
+	uiLayer.AddPanel(&ui.Panel{
 		ID:      "info_panel",
 		Visible: true,
 		Anchor:  ui.AnchorBottomRight,
@@ -94,25 +86,22 @@ func New(cfg *config.Config) (*Game, error) {
 		},
 	})
 
+	tc := timecontrol.New(cfg.Time.SpeedOptions, cfg.Time.DefaultSpeed)
+
+	eui, fpsLabel := buildTopbar(cfg, tc)
+
 	con := console.New(cfg)
 
-	// Find FPS label for updates
-	var fpsLabel *widget.Label
-	// We'll set this in buildTopBar by returning it
-
 	g := &Game{
-		Config:    cfg,
-		World:     w,
-		Map:       mv,
-		UIManager: uiMgr,
-		OldPanels: oldPanels,
-		Time:      tc,
-		Console:   con,
-		fpsLabel:  fpsLabel, // Will be set in buildTopBar
+		Config:   cfg,
+		World:    w,
+		Map:      mv,
+		UI:       uiLayer,
+		EbitenUI: eui,
+		Time:     tc,
+		Console:  con,
+		fpsLabel: fpsLabel,
 	}
-
-	// Actually rebuild with access to game struct
-	g.buildTopBar()
 
 	displayKeys := map[string]bool{
 		"WINDOW_MODE": true, "WINDOW_WIDTH": true, "WINDOW_HEIGHT": true,
@@ -128,181 +117,132 @@ func New(cfg *config.Config) (*Game, error) {
 	return g, nil
 }
 
-func (g *Game) buildTopBar() {
-	root := g.UIManager.Root()
-	theme := g.UIManager.Theme()
-	cfg := g.Config
-	tc := g.Time
+func buildTopbar(cfg *config.Config, tc *timecontrol.TimeControl) (*ebitenui.UI, *widget.Text) {
+	face := ui.Face()
+	titleFace := ui.FaceSize(16)
+	white := color.NRGBA{220, 220, 220, 255}
+	topbarBg := color.NRGBA{16, 19, 25, 230}
 
-	// Create topbar background panel
-	topBarHeight := cfg.UI.TopBarHeight
-	topBar := widget.NewPanel(0, 0, 100, topBarHeight, theme.PanelBackground, theme.PanelBorder)
-	topBar.SetRadius(0) // No rounded corners for topbar
+	root := widget.NewContainer(
+		widget.ContainerOpts.Layout(widget.NewAnchorLayout()),
+	)
 
-	// Create a container for topbar content
-	topBarContainer := widget.NewContainer(0, 0, 100, topBarHeight, widget.LayoutAbsolute)
+	topbar := widget.NewContainer(
+		widget.ContainerOpts.BackgroundImage(euiimage.NewNineSliceColor(topbarBg)),
+		widget.ContainerOpts.Layout(widget.NewAnchorLayout()),
+		widget.ContainerOpts.WidgetOpts(
+			widget.WidgetOpts.LayoutData(widget.AnchorLayoutData{
+				StretchHorizontal: true,
+			}),
+			widget.WidgetOpts.MinSize(0, int(cfg.UI.TopBarHeight)),
+		),
+	)
 
-	// Title label (left)
-	titleLabel := widget.NewLabel(theme.PaddingLarge, 0, 200, topBarHeight, cfg.Title)
-	topBarContainer.Add(titleLabel)
+	// Left: title
+	titleLabel := widget.NewText(
+		widget.TextOpts.Text(cfg.Title, &titleFace, white),
+		widget.TextOpts.WidgetOpts(
+			widget.WidgetOpts.LayoutData(widget.AnchorLayoutData{
+				HorizontalPosition: widget.AnchorLayoutPositionStart,
+				VerticalPosition:   widget.AnchorLayoutPositionCenter,
+				Padding:            &widget.Insets{Left: 16},
+			}),
+		),
+	)
 
-	// FPS label (left, after title)
-	g.fpsLabel = widget.NewLabel(theme.PaddingLarge+200, 0, 100, topBarHeight, "60 FPS")
-	topBarContainer.Add(g.fpsLabel)
+	// Center: sample colored buttons
+	centerSection := widget.NewContainer(
+		widget.ContainerOpts.Layout(widget.NewRowLayout(
+			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
+			widget.RowLayoutOpts.Spacing(8),
+		)),
+		widget.ContainerOpts.WidgetOpts(
+			widget.WidgetOpts.LayoutData(widget.AnchorLayoutData{
+				HorizontalPosition: widget.AnchorLayoutPositionCenter,
+				VerticalPosition:   widget.AnchorLayoutPositionCenter,
+			}),
+		),
+	)
+	centerSection.AddChild(ui.TextButton("Trade", ui.ButtonColors(color.NRGBA{40, 80, 160, 255}), white, face, nil))
+	centerSection.AddChild(ui.TextButton("Fleet", ui.ButtonColors(color.NRGBA{40, 140, 60, 255}), white, face, nil))
+	centerSection.AddChild(ui.TextButton("Events", ui.ButtonColors(color.NRGBA{160, 50, 50, 255}), white, face, nil))
 
-	// Sample colored buttons in the middle
-	middleButtonsContainer := widget.NewContainer(0, 0, 300, topBarHeight, widget.LayoutHorizontal)
-	middleButtonsContainer.SetSpacing(theme.Spacing)
-	middleButtonsContainer.SetPadding(theme.PaddingMedium)
-	middleButtonsContainer.SetAlignment(widget.AlignCenter)
+	// Right: time controls + FPS
+	rightSection := widget.NewContainer(
+		widget.ContainerOpts.Layout(widget.NewRowLayout(
+			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
+			widget.RowLayoutOpts.Spacing(4),
+		)),
+		widget.ContainerOpts.WidgetOpts(
+			widget.WidgetOpts.LayoutData(widget.AnchorLayoutData{
+				HorizontalPosition: widget.AnchorLayoutPositionEnd,
+				VerticalPosition:   widget.AnchorLayoutPositionCenter,
+				Padding:            &widget.Insets{Right: 16},
+			}),
+		),
+	)
 
-	// Button 1: Blue
-	btn1Normal, btn1Hover, btn1Pressed := ui.ColoredButtonTheme(color.RGBA{60, 120, 200, 220})
-	btn1 := widget.NewButton(0, 0, 70, 32, "Blue", func() {
-		fmt.Println("Blue button clicked!")
-	})
-	btn1.SetColors(btn1Normal, btn1Hover, btn1Pressed, theme.ButtonText, theme.ButtonBorder)
-	middleButtonsContainer.Add(btn1)
-
-	// Button 2: Green
-	btn2Normal, btn2Hover, btn2Pressed := ui.ColoredButtonTheme(color.RGBA{60, 180, 100, 220})
-	btn2 := widget.NewButton(0, 0, 70, 32, "Green", func() {
-		fmt.Println("Green button clicked!")
-	})
-	btn2.SetColors(btn2Normal, btn2Hover, btn2Pressed, theme.ButtonText, theme.ButtonBorder)
-	middleButtonsContainer.Add(btn2)
-
-	// Button 3: Red
-	btn3Normal, btn3Hover, btn3Pressed := ui.ColoredButtonTheme(color.RGBA{200, 80, 80, 220})
-	btn3 := widget.NewButton(0, 0, 70, 32, "Red", func() {
-		fmt.Println("Red button clicked!")
-	})
-	btn3.SetColors(btn3Normal, btn3Hover, btn3Pressed, theme.ButtonText, theme.ButtonBorder)
-	middleButtonsContainer.Add(btn3)
-
-	topBarContainer.Add(middleButtonsContainer)
-
-	// Time control buttons (right side)
-	timeControlContainer := widget.NewContainer(0, 0, 160, topBarHeight, widget.LayoutHorizontal)
-	timeControlContainer.SetSpacing(theme.Spacing)
-	timeControlContainer.SetPadding(theme.PaddingMedium)
-	timeControlContainer.SetAlignment(widget.AlignCenter)
-
-	// Pause button
-	pauseBtn := widget.NewButton(0, 0, 36, 32, "||", func() {
+	tcBase := color.NRGBA{30, 35, 42, 220}
+	rightSection.AddChild(ui.TextButton("||", ui.ButtonColors(tcBase), white, face, func() {
 		tc.TogglePause()
-	})
-	timeControlContainer.Add(pauseBtn)
-
-	// 1x speed
-	speed1Btn := widget.NewButton(0, 0, 36, 32, "1x", func() {
+	}))
+	rightSection.AddChild(ui.TextButton("1x", ui.ButtonColors(tcBase), white, face, func() {
 		tc.Paused = false
 		tc.SetSpeed(1.0)
-	})
-	timeControlContainer.Add(speed1Btn)
-
-	// 5x speed
-	speed5Btn := widget.NewButton(0, 0, 36, 32, "5x", func() {
+	}))
+	rightSection.AddChild(ui.TextButton("5x", ui.ButtonColors(tcBase), white, face, func() {
 		tc.Paused = false
 		tc.SetSpeed(5.0)
-	})
-	timeControlContainer.Add(speed5Btn)
-
-	// 25x speed
-	speed25Btn := widget.NewButton(0, 0, 42, 32, "25x", func() {
+	}))
+	rightSection.AddChild(ui.TextButton("25x", ui.ButtonColors(tcBase), white, face, func() {
 		tc.Paused = false
 		tc.SetSpeed(25.0)
-	})
-	timeControlContainer.Add(speed25Btn)
+	}))
 
-	topBarContainer.Add(timeControlContainer)
+	fpsLabel := widget.NewText(
+		widget.TextOpts.Text("0 FPS", &face, color.NRGBA{160, 160, 160, 255}),
+	)
+	rightSection.AddChild(fpsLabel)
 
-	// Add topbar to root
-	root.Add(topBar)
-	root.Add(topBarContainer)
+	topbar.AddChild(titleLabel)
+	topbar.AddChild(centerSection)
+	topbar.AddChild(rightSection)
+	root.AddChild(topbar)
 
-	// Position middle buttons and time control (will be updated in Update)
-	g.repositionTopBarElements(800, 600) // Default size
-}
-
-func (g *Game) repositionTopBarElements(screenW, screenH float64) {
-	root := g.UIManager.Root()
-	if root.ChildCount() < 2 {
-		return // Not fully initialized
-	}
-
-	topBarHeight := g.Config.UI.TopBarHeight
-
-	// Update topbar panel size (first child)
-	if panel := root.GetChild(0); panel != nil {
-		panel.SetBounds(widget.Bounds{X: 0, Y: 0, W: screenW, H: topBarHeight})
-	}
-
-	// Update topbar container (second child)
-	if topBarContainer, ok := root.GetChild(1).(*widget.Container); ok && topBarContainer != nil {
-		topBarContainer.SetBounds(widget.Bounds{X: 0, Y: 0, W: screenW, H: topBarHeight})
-
-		// Position middle buttons container in the center (third child of topBarContainer)
-		if middleContainer, ok := topBarContainer.GetChild(2).(*widget.Container); ok && middleContainer != nil {
-			middleW := 300.0
-			middleContainer.SetBounds(widget.Bounds{
-				X: (screenW - middleW) / 2,
-				Y: 0,
-				W: middleW,
-				H: topBarHeight,
-			})
-		}
-
-		// Position time control on the right (fourth child of topBarContainer)
-		if timeContainer, ok := topBarContainer.GetChild(3).(*widget.Container); ok && timeContainer != nil {
-			timeW := 180.0
-			timeContainer.SetBounds(widget.Bounds{
-				X: screenW - timeW - g.UIManager.Theme().PaddingLarge,
-				Y: 0,
-				W: timeW,
-				H: topBarHeight,
-			})
-		}
-	}
-}
-
-// Helper function (not used in final version since we rebuild in New)
-func buildTopBar(uiMgr *ui.Manager, cfg *config.Config, tc *timecontrol.TimeControl) {
-	// Placeholder - actual building happens in Game.buildTopBar()
+	return ui.NewUI(root), fpsLabel
 }
 
 func (g *Game) Update() error {
 	sw, sh := g.Map.ScreenSize()
 
-	// Update FPS label
-	if g.fpsLabel != nil {
-		g.fpsLabel.SetText(fmt.Sprintf("%.0f FPS", ebiten.ActualFPS()))
-	}
-
-	// Reposition topbar elements based on screen size
-	g.repositionTopBarElements(sw, sh)
-
 	consoleFocused := g.Console.Update(sw, sh)
+
+	g.EbitenUI.Update()
 
 	uiFocused := false
 	if !consoleFocused {
-		g.UIManager.Update(sw, sh)
-		uiFocused = g.OldPanels.Update(sw, sh)
+		uiFocused = g.UI.Update(sw, sh)
 	}
 
-	g.Map.SetInputSuppressed(uiFocused || consoleFocused)
+	// Suppress map input when cursor is over topbar or other UI
+	_, my := ebiten.CursorPosition()
+	topbarHovered := float64(my) < g.Config.UI.TopBarHeight
+
+	g.Map.SetInputSuppressed(uiFocused || consoleFocused || topbarHovered)
 
 	g.Map.UpdateInput()
 	g.Time.Update(1.0 / 60.0)
 	g.Map.UpdateLayers(g.Time)
+
+	g.fpsLabel.Label = fmt.Sprintf("%.0f FPS", ebiten.ActualFPS())
 
 	return nil
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	g.Map.Draw(screen)
-	g.UIManager.Draw(screen)
-	g.OldPanels.Draw(screen)
+	g.UI.Draw(screen)
+	g.EbitenUI.Draw(screen)
 	g.Console.Draw(screen)
 }
 
