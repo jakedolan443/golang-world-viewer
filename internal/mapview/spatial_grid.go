@@ -6,6 +6,10 @@ type SpatialGrid struct {
 	cellSize float64
 	cells    map[int]map[int][]*CachedPolygon
 	bounds   BoundingBox
+
+	// Reusable buffers to avoid per-frame allocations.
+	seen   map[*CachedPolygon]bool
+	result []*CachedPolygon
 }
 
 func NewSpatialGrid(bounds BoundingBox, cellSize float64) *SpatialGrid {
@@ -13,6 +17,7 @@ func NewSpatialGrid(bounds BoundingBox, cellSize float64) *SpatialGrid {
 		cellSize: cellSize,
 		cells:    make(map[int]map[int][]*CachedPolygon),
 		bounds:   bounds,
+		seen:     make(map[*CachedPolygon]bool),
 	}
 }
 
@@ -37,8 +42,9 @@ func (sg *SpatialGrid) GetVisible(vb BoundingBox) []*CachedPolygon {
 	minCY := int(math.Floor(vb.MinY / sg.cellSize))
 	maxCY := int(math.Ceil(vb.MaxY / sg.cellSize))
 
-	seen := make(map[*CachedPolygon]bool)
-	var result []*CachedPolygon
+	clear(sg.seen)
+	sg.result = sg.result[:0]
+
 	for x := minCX; x <= maxCX; x++ {
 		col := sg.cells[x]
 		if col == nil {
@@ -46,12 +52,12 @@ func (sg *SpatialGrid) GetVisible(vb BoundingBox) []*CachedPolygon {
 		}
 		for y := minCY; y <= maxCY; y++ {
 			for _, p := range col[y] {
-				if !seen[p] && p.Bounds.Intersects(vb) {
-					seen[p] = true
-					result = append(result, p)
+				if !sg.seen[p] && p.Bounds.Intersects(vb) {
+					sg.seen[p] = true
+					sg.result = append(sg.result, p)
 				}
 			}
 		}
 	}
-	return result
+	return sg.result
 }

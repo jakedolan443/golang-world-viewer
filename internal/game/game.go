@@ -4,7 +4,6 @@ package game
 import (
 	"fmt"
 	"image/color"
-	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -16,10 +15,12 @@ import (
 	"shipping/internal/mapview"
 	"shipping/internal/timecontrol"
 	"shipping/internal/ui"
+	"shipping/internal/world"
 )
 
 type Game struct {
 	Config  *config.Config
+	World   *world.World
 	Map     *mapview.MapView
 	UI      *ui.Layer
 	Time    *timecontrol.TimeControl
@@ -32,6 +33,8 @@ func New(cfg *config.Config) (*Game, error) {
 		return nil, err
 	}
 
+	w := world.NewDefault()
+
 	mv.AddLayer(layer.NewOceanCloudLayer(
 		cfg.Cloud.ZoomThreshold,
 		cfg.Cloud.FadeDuration,
@@ -40,7 +43,16 @@ func New(cfg *config.Config) (*Game, error) {
 		cfg.Cloud.MaxDimension,
 		cfg.Cloud.WorkerCount,
 	))
-	mv.AddLayer(layer.NewShippingLaneLayer())
+	mv.AddLayer(layer.NewShippingLaneLayer(
+		w,
+		color.RGBA{100, 180, 220, 180},
+		2.0,
+	))
+	mv.AddLayer(layer.NewPortLayer(
+		w,
+		color.RGBA{195, 160, 80, 255},
+		color.RGBA{150, 125, 65, 255},
+	))
 
 	uiLayer := ui.NewLayer()
 
@@ -77,9 +89,8 @@ func New(cfg *config.Config) (*Game, error) {
 			lines := []string{
 				"Selected: —",
 				"",
-				"Fleet:  12 vessels",
-				"Routes: 6 active",
-				"Revenue: $2.4M/day",
+				fmt.Sprintf("Ports:  %d", len(w.Ports)),
+				fmt.Sprintf("Routes: %d active", len(w.Routes)),
 			}
 			y := int(ctx.Y)
 			for _, line := range lines {
@@ -137,8 +148,6 @@ func New(cfg *config.Config) (*Game, error) {
 			bw := float32(btnW)
 			bh := float32(btnH)
 			gap := float32(btnGap)
-			white := ctx.Screen.Bounds()
-			_ = white
 
 			for i := 0; i < 4; i++ {
 				x0 := bx + float32(i)*(bw+gap)
@@ -200,7 +209,7 @@ func New(cfg *config.Config) (*Game, error) {
 
 	con := console.New(cfg)
 
-	g := &Game{Config: cfg, Map: mv, UI: uiLayer, Time: tc, Console: con}
+	g := &Game{Config: cfg, World: w, Map: mv, UI: uiLayer, Time: tc, Console: con}
 
 	displayKeys := map[string]bool{
 		"WINDOW_MODE": true, "WINDOW_WIDTH": true, "WINDOW_HEIGHT": true,
@@ -237,26 +246,6 @@ func (g *Game) Update() error {
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	g.Map.Draw(screen)
-
-	portFill := color.RGBA{195, 160, 80, 255}
-	portStroke := color.RGBA{150, 125, 65, 255}
-	zoom := g.Map.Zoom()
-	radius := float32(math.Max(2.5, math.Min(8, 4*zoom)))
-	ports := []mapview.LatLon{
-		{Lon: -74.0, Lat: 40.7}, {Lon: -43.2, Lat: -22.9}, {Lon: -0.1, Lat: 51.5}, {Lon: 18.4, Lat: -33.9},
-		{Lon: 121.5, Lat: 31.2}, {Lon: 151.2, Lat: -33.9}, {Lon: -122.4, Lat: 37.8}, {Lon: 139.7, Lat: 35.7},
-		{Lon: 103.9, Lat: 1.3}, {Lon: 55.3, Lat: 25.3},
-	}
-	for _, p := range ports {
-		g.Map.DrawCircle(screen, p, radius, portFill, portStroke, 1.0)
-	}
-
-	route := []mapview.LatLon{
-		{Lon: -0.1, Lat: 51.5}, {Lon: -9.1, Lat: 38.7}, {Lon: -16.9, Lat: 28.1}, {Lon: -43.2, Lat: -22.9},
-	}
-	routeColor := color.RGBA{100, 180, 220, 180}
-	g.Map.DrawLine(screen, route, 2.0, routeColor)
-
 	g.UI.Draw(screen)
 	g.Console.Draw(screen)
 }

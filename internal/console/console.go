@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -844,18 +843,6 @@ func (c *Console) completeTab() {
 	c.suggestion = ""
 	c.tabOptions = nil
 	c.blink = 0
-}
-
-func (c *Console) Completions(prefix string) []string {
-	prefix = strings.ToUpper(prefix)
-	var out []string
-	for _, k := range c.allKeys {
-		if strings.HasPrefix(k, prefix) {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 
