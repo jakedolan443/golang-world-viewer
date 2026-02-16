@@ -7,7 +7,6 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"shipping/internal/config"
 	"shipping/internal/console"
@@ -15,16 +14,21 @@ import (
 	"shipping/internal/mapview"
 	"shipping/internal/timecontrol"
 	"shipping/internal/ui"
+	"shipping/internal/ui/widget"
 	"shipping/internal/world"
 )
 
 type Game struct {
-	Config  *config.Config
-	World   *world.World
-	Map     *mapview.MapView
-	UI      *ui.Layer
-	Time    *timecontrol.TimeControl
-	Console *console.Console
+	Config     *config.Config
+	World      *world.World
+	Map        *mapview.MapView
+	UIManager  *ui.Manager
+	OldPanels  *ui.Layer // Keep for info panel
+	Time       *timecontrol.TimeControl
+	Console    *console.Console
+
+	// FPS label for dynamic updates
+	fpsLabel *widget.Label
 }
 
 func New(cfg *config.Config) (*Game, error) {
@@ -54,28 +58,18 @@ func New(cfg *config.Config) (*Game, error) {
 		color.RGBA{150, 125, 65, 255},
 	))
 
-	uiLayer := ui.NewLayer()
+	// Create new UI framework manager
+	theme := ui.DefaultTheme()
+	uiMgr := ui.NewManager(theme)
 
-	uiLayer.AddPanel(&ui.Panel{
-		ID:      "topbar",
-		Visible: true,
-		Anchor:  ui.AnchorTopStretch,
-		OffsetX: 0,
-		OffsetY: 0,
-		Height:  cfg.UI.TopBarHeight,
-		Padding: 12,
-		Style:   ui.DefaultTopbarStyle(),
-		OnDraw: func(ctx *ui.DrawContext) {
-			ebitenutil.DebugPrintAt(ctx.Screen,
-				cfg.Title,
-				int(ctx.X), int(ctx.Y))
-			ebitenutil.DebugPrintAt(ctx.Screen,
-				fmt.Sprintf("%.0f FPS", ebiten.ActualFPS()),
-				int(ctx.X+ctx.W-80), int(ctx.Y))
-		},
-	})
+	tc := timecontrol.New(cfg.Time.SpeedOptions, cfg.Time.DefaultSpeed)
 
-	uiLayer.AddPanel(&ui.Panel{
+	// Build the topbar using the new widget system
+	buildTopBar(uiMgr, cfg, tc)
+
+	// Keep old system for info panel (bottom-right)
+	oldPanels := ui.NewLayer()
+	oldPanels.AddPanel(&ui.Panel{
 		ID:      "info_panel",
 		Visible: true,
 		Anchor:  ui.AnchorBottomRight,
@@ -100,116 +94,25 @@ func New(cfg *config.Config) (*Game, error) {
 		},
 	})
 
-	tc := timecontrol.New(cfg.Time.SpeedOptions, cfg.Time.DefaultSpeed)
-
-	btnW := 32.0
-	btnH := 28.0
-	btnGap := 4.0
-	btnCount := 4.0
-	tcPanelW := btnCount*btnW + (btnCount-1)*btnGap + 16
-
-	colWhite := color.RGBA{220, 220, 220, 255}
-	colActive := color.RGBA{240, 200, 60, 255}
-
-	uiLayer.AddPanel(&ui.Panel{
-		ID:      "time_control",
-		Visible: true,
-		Anchor:  ui.AnchorTopLeft,
-		OffsetX: 8,
-		OffsetY: cfg.UI.TopBarHeight + 8,
-		Width:   tcPanelW,
-		Height:  btnH + 16,
-		Padding: 8,
-		Style:   ui.DefaultPanelStyle(),
-		OnClick: func(ctx *ui.DrawContext, mx, my float64) {
-			bx := ctx.X
-			for i := 0; i < 4; i++ {
-				x0 := bx + float64(i)*(btnW+btnGap)
-				if mx >= x0 && mx < x0+btnW && my >= ctx.Y && my < ctx.Y+btnH {
-					switch i {
-					case 0:
-						tc.TogglePause()
-					case 1:
-						tc.Paused = false
-						tc.SetSpeed(1.0)
-					case 2:
-						tc.Paused = false
-						tc.SetSpeed(5.0)
-					case 3:
-						tc.Paused = false
-						tc.SetSpeed(25.0)
-					}
-				}
-			}
-		},
-		OnDraw: func(ctx *ui.DrawContext) {
-			bx := float32(ctx.X)
-			by := float32(ctx.Y)
-			bw := float32(btnW)
-			bh := float32(btnH)
-			gap := float32(btnGap)
-
-			for i := 0; i < 4; i++ {
-				x0 := bx + float32(i)*(bw+gap)
-				hovered := false
-				{
-					mx, my := ebiten.CursorPosition()
-					mxf, myf := float64(mx), float64(my)
-					hovered = mxf >= float64(x0) && mxf < float64(x0+bw) &&
-						myf >= float64(by) && myf < float64(by+bh)
-				}
-
-				active := false
-				switch i {
-				case 0:
-					active = tc.Paused
-				case 1:
-					active = !tc.Paused && tc.Speed == 1.0
-				case 2:
-					active = !tc.Paused && tc.Speed == 5.0
-				case 3:
-					active = !tc.Paused && tc.Speed == 25.0
-				}
-
-				bgClr := color.RGBA{30, 35, 42, 200}
-				if hovered {
-					bgClr = color.RGBA{45, 52, 62, 220}
-				}
-				if active {
-					bgClr = color.RGBA{50, 48, 30, 220}
-				}
-				vector.DrawFilledRect(ctx.Screen, x0, by, bw, bh, bgClr, false)
-
-				iconClr := colWhite
-				if active {
-					iconClr = colActive
-				}
-
-				cx := x0 + bw/2
-				cy := by + bh/2
-				s := float32(5.0)
-
-				switch i {
-				case 0:
-					vector.DrawFilledRect(ctx.Screen, cx-s+1, cy-s, s*0.4, s*2, iconClr, false)
-					vector.DrawFilledRect(ctx.Screen, cx+1, cy-s, s*0.4, s*2, iconClr, false)
-				case 1:
-					drawTriangleRight(ctx.Screen, cx-2, cy, s, iconClr)
-				case 2:
-					drawTriangleRight(ctx.Screen, cx-s+1, cy, s*0.8, iconClr)
-					drawTriangleRight(ctx.Screen, cx+1, cy, s*0.8, iconClr)
-				case 3:
-					drawTriangleRight(ctx.Screen, cx-s, cy, s*0.7, iconClr)
-					drawTriangleRight(ctx.Screen, cx-2, cy, s*0.7, iconClr)
-					drawTriangleRight(ctx.Screen, cx+s-4, cy, s*0.7, iconClr)
-				}
-			}
-		},
-	})
-
 	con := console.New(cfg)
 
-	g := &Game{Config: cfg, World: w, Map: mv, UI: uiLayer, Time: tc, Console: con}
+	// Find FPS label for updates
+	var fpsLabel *widget.Label
+	// We'll set this in buildTopBar by returning it
+
+	g := &Game{
+		Config:    cfg,
+		World:     w,
+		Map:       mv,
+		UIManager: uiMgr,
+		OldPanels: oldPanels,
+		Time:      tc,
+		Console:   con,
+		fpsLabel:  fpsLabel, // Will be set in buildTopBar
+	}
+
+	// Actually rebuild with access to game struct
+	g.buildTopBar()
 
 	displayKeys := map[string]bool{
 		"WINDOW_MODE": true, "WINDOW_WIDTH": true, "WINDOW_HEIGHT": true,
@@ -225,14 +128,166 @@ func New(cfg *config.Config) (*Game, error) {
 	return g, nil
 }
 
+func (g *Game) buildTopBar() {
+	root := g.UIManager.Root()
+	theme := g.UIManager.Theme()
+	cfg := g.Config
+	tc := g.Time
+
+	// Create topbar background panel
+	topBarHeight := cfg.UI.TopBarHeight
+	topBar := widget.NewPanel(0, 0, 100, topBarHeight, theme.PanelBackground, theme.PanelBorder)
+	topBar.SetRadius(0) // No rounded corners for topbar
+
+	// Create a container for topbar content
+	topBarContainer := widget.NewContainer(0, 0, 100, topBarHeight, widget.LayoutAbsolute)
+
+	// Title label (left)
+	titleLabel := widget.NewLabel(theme.PaddingLarge, 0, 200, topBarHeight, cfg.Title)
+	topBarContainer.Add(titleLabel)
+
+	// FPS label (left, after title)
+	g.fpsLabel = widget.NewLabel(theme.PaddingLarge+200, 0, 100, topBarHeight, "60 FPS")
+	topBarContainer.Add(g.fpsLabel)
+
+	// Sample colored buttons in the middle
+	middleButtonsContainer := widget.NewContainer(0, 0, 300, topBarHeight, widget.LayoutHorizontal)
+	middleButtonsContainer.SetSpacing(theme.Spacing)
+	middleButtonsContainer.SetPadding(theme.PaddingMedium)
+	middleButtonsContainer.SetAlignment(widget.AlignCenter)
+
+	// Button 1: Blue
+	btn1Normal, btn1Hover, btn1Pressed := ui.ColoredButtonTheme(color.RGBA{60, 120, 200, 220})
+	btn1 := widget.NewButton(0, 0, 70, 32, "Blue", func() {
+		fmt.Println("Blue button clicked!")
+	})
+	btn1.SetColors(btn1Normal, btn1Hover, btn1Pressed, theme.ButtonText, theme.ButtonBorder)
+	middleButtonsContainer.Add(btn1)
+
+	// Button 2: Green
+	btn2Normal, btn2Hover, btn2Pressed := ui.ColoredButtonTheme(color.RGBA{60, 180, 100, 220})
+	btn2 := widget.NewButton(0, 0, 70, 32, "Green", func() {
+		fmt.Println("Green button clicked!")
+	})
+	btn2.SetColors(btn2Normal, btn2Hover, btn2Pressed, theme.ButtonText, theme.ButtonBorder)
+	middleButtonsContainer.Add(btn2)
+
+	// Button 3: Red
+	btn3Normal, btn3Hover, btn3Pressed := ui.ColoredButtonTheme(color.RGBA{200, 80, 80, 220})
+	btn3 := widget.NewButton(0, 0, 70, 32, "Red", func() {
+		fmt.Println("Red button clicked!")
+	})
+	btn3.SetColors(btn3Normal, btn3Hover, btn3Pressed, theme.ButtonText, theme.ButtonBorder)
+	middleButtonsContainer.Add(btn3)
+
+	topBarContainer.Add(middleButtonsContainer)
+
+	// Time control buttons (right side)
+	timeControlContainer := widget.NewContainer(0, 0, 160, topBarHeight, widget.LayoutHorizontal)
+	timeControlContainer.SetSpacing(theme.Spacing)
+	timeControlContainer.SetPadding(theme.PaddingMedium)
+	timeControlContainer.SetAlignment(widget.AlignCenter)
+
+	// Pause button
+	pauseBtn := widget.NewButton(0, 0, 36, 32, "||", func() {
+		tc.TogglePause()
+	})
+	timeControlContainer.Add(pauseBtn)
+
+	// 1x speed
+	speed1Btn := widget.NewButton(0, 0, 36, 32, "1x", func() {
+		tc.Paused = false
+		tc.SetSpeed(1.0)
+	})
+	timeControlContainer.Add(speed1Btn)
+
+	// 5x speed
+	speed5Btn := widget.NewButton(0, 0, 36, 32, "5x", func() {
+		tc.Paused = false
+		tc.SetSpeed(5.0)
+	})
+	timeControlContainer.Add(speed5Btn)
+
+	// 25x speed
+	speed25Btn := widget.NewButton(0, 0, 42, 32, "25x", func() {
+		tc.Paused = false
+		tc.SetSpeed(25.0)
+	})
+	timeControlContainer.Add(speed25Btn)
+
+	topBarContainer.Add(timeControlContainer)
+
+	// Add topbar to root
+	root.Add(topBar)
+	root.Add(topBarContainer)
+
+	// Position middle buttons and time control (will be updated in Update)
+	g.repositionTopBarElements(800, 600) // Default size
+}
+
+func (g *Game) repositionTopBarElements(screenW, screenH float64) {
+	root := g.UIManager.Root()
+	if root.ChildCount() < 2 {
+		return // Not fully initialized
+	}
+
+	topBarHeight := g.Config.UI.TopBarHeight
+
+	// Update topbar panel size (first child)
+	if panel := root.GetChild(0); panel != nil {
+		panel.SetBounds(widget.Bounds{X: 0, Y: 0, W: screenW, H: topBarHeight})
+	}
+
+	// Update topbar container (second child)
+	if topBarContainer, ok := root.GetChild(1).(*widget.Container); ok && topBarContainer != nil {
+		topBarContainer.SetBounds(widget.Bounds{X: 0, Y: 0, W: screenW, H: topBarHeight})
+
+		// Position middle buttons container in the center (third child of topBarContainer)
+		if middleContainer, ok := topBarContainer.GetChild(2).(*widget.Container); ok && middleContainer != nil {
+			middleW := 300.0
+			middleContainer.SetBounds(widget.Bounds{
+				X: (screenW - middleW) / 2,
+				Y: 0,
+				W: middleW,
+				H: topBarHeight,
+			})
+		}
+
+		// Position time control on the right (fourth child of topBarContainer)
+		if timeContainer, ok := topBarContainer.GetChild(3).(*widget.Container); ok && timeContainer != nil {
+			timeW := 180.0
+			timeContainer.SetBounds(widget.Bounds{
+				X: screenW - timeW - g.UIManager.Theme().PaddingLarge,
+				Y: 0,
+				W: timeW,
+				H: topBarHeight,
+			})
+		}
+	}
+}
+
+// Helper function (not used in final version since we rebuild in New)
+func buildTopBar(uiMgr *ui.Manager, cfg *config.Config, tc *timecontrol.TimeControl) {
+	// Placeholder - actual building happens in Game.buildTopBar()
+}
+
 func (g *Game) Update() error {
 	sw, sh := g.Map.ScreenSize()
+
+	// Update FPS label
+	if g.fpsLabel != nil {
+		g.fpsLabel.SetText(fmt.Sprintf("%.0f FPS", ebiten.ActualFPS()))
+	}
+
+	// Reposition topbar elements based on screen size
+	g.repositionTopBarElements(sw, sh)
 
 	consoleFocused := g.Console.Update(sw, sh)
 
 	uiFocused := false
 	if !consoleFocused {
-		uiFocused = g.UI.Update(sw, sh)
+		g.UIManager.Update(sw, sh)
+		uiFocused = g.OldPanels.Update(sw, sh)
 	}
 
 	g.Map.SetInputSuppressed(uiFocused || consoleFocused)
@@ -246,7 +301,8 @@ func (g *Game) Update() error {
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	g.Map.Draw(screen)
-	g.UI.Draw(screen)
+	g.UIManager.Draw(screen)
+	g.OldPanels.Draw(screen)
 	g.Console.Draw(screen)
 }
 
@@ -310,30 +366,4 @@ func (g *Game) DrawFinalScreen(screen ebiten.FinalScreen, offscreen *ebiten.Imag
 		op.Filter = ebiten.FilterLinear
 	}
 	screen.DrawImage(offscreen, op)
-}
-
-var whitePixel *ebiten.Image
-
-func getWhitePixel() *ebiten.Image {
-	if whitePixel == nil {
-		whitePixel = ebiten.NewImage(1, 1)
-		whitePixel.Fill(color.White)
-	}
-	return whitePixel
-}
-
-func drawTriangleRight(dst *ebiten.Image, cx, cy, size float32, clr color.RGBA) {
-	r, g, b, a := clr.RGBA()
-	cr := float32(r) / 0xffff
-	cg := float32(g) / 0xffff
-	cb := float32(b) / 0xffff
-	ca := float32(a) / 0xffff
-
-	verts := []ebiten.Vertex{
-		{DstX: cx - size*0.5, DstY: cy - size, ColorR: cr, ColorG: cg, ColorB: cb, ColorA: ca},
-		{DstX: cx + size, DstY: cy, ColorR: cr, ColorG: cg, ColorB: cb, ColorA: ca},
-		{DstX: cx - size*0.5, DstY: cy + size, ColorR: cr, ColorG: cg, ColorB: cb, ColorA: ca},
-	}
-	idx := []uint16{0, 1, 2}
-	dst.DrawTriangles(verts, idx, getWhitePixel(), &ebiten.DrawTrianglesOptions{})
 }
