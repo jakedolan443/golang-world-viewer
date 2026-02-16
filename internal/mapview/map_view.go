@@ -216,7 +216,7 @@ func (mv *MapView) DrawPoly(screen *ebiten.Image, points []LatLon, fill, stroke 
 		if err != nil || len(tri) == 0 {
 			continue
 		}
-		r, g, b, a := fill.(color.RGBA).RGBA()
+		r, g, b, a := fill.RGBA()
 		cr, cg, cb, ca := float32(r)/0xffff, float32(g)/0xffff, float32(b)/0xffff, float32(a)/0xffff
 		verts := make([]ebiten.Vertex, n)
 		for i := 0; i < n; i++ {
